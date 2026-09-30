@@ -165,3 +165,19 @@ Alternative: set up an SSH key once (`ssh-keygen -t ed25519`, then add the publi
 ## Dataset
 
 See `data/README.md`.
+
+## My experiments (Salvador)
+
+### Week 4: preprocessing and cross-validation
+
+| Model | Encoder | CV validation (mean ± std) | Gap | FPR African-American / Caucasian |
+|---|---|---|---|---|
+| Logistic regression | target | 0.672 ± 0.013 | +0.003 | 0.26 / 0.13 |
+| Logistic regression | onehot | 0.670 ± 0.016 | +0.002 | 0.30 / 0.16 |
+| Decision tree | target | 0.611 ± 0.015 | +0.084 | 0.35 / 0.25 |
+
+Week 3 (single split, decision tree): test accuracy 0.657.
+
+- One change tested: target encoder vs one-hot. The accuracy difference (0.002) is well below one standard deviation, so it is noise. One-hot raised false positives for every group, so the target encoder stays.
+- CV changes the picture: the week 3 score of 0.657 came from one optimistic split (with older preprocessing). Under CV the tree scores 0.611 and overfits (gap +0.084). Logistic regression beats it by about 4 standard deviations, so it becomes the model.
+- Removing race from the features does not remove the disparity: African-Americans still get about twice the false positive rate of Caucasians.
