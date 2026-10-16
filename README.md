@@ -219,3 +219,21 @@ Week 3 (single split, decision tree): test accuracy 0.657.
 - One change tested: target encoder vs one-hot. The accuracy difference (0.002) is well below one standard deviation, so it is noise. One-hot raised false positives for every group, so the target encoder stays.
 - CV changes the picture: the week 3 score of 0.657 came from one optimistic split (with older preprocessing). Under CV the tree scores 0.611 and overfits (gap +0.084). Logistic regression beats it by about 4 standard deviations, so it becomes the model.
 - Removing race from the features does not remove the disparity: African-Americans still get about twice the false positive rate of Caucasians.
+
+### Weeks 5-6: hyperparameter tuning and ensembles
+
+All five models tuned with Optuna (30 trials, 5 inner folds) and scored with nested CV on the same 5 outer folds. For logistic regression I added a search space for `C` (log scale, 0.0001 to 100), the week 5 challenge. The test set is still untouched.
+
+| Model | Default: CV mean ± std (gap) | Tuned: nested CV mean ± std (gap) | Tuning score (best trial) | Optimism | Chosen hyperparameters |
+|---|---|---|---|---|---|
+| Logistic regression | 0.672 ± 0.013 (+0.003) | 0.673 ± 0.016 (+0.004) | 0.678 | +0.002 | C=0.0715 |
+| Decision tree | 0.611 ± 0.015 (+0.084) | 0.675 ± 0.020 (+0.009) | 0.680 | -0.000 | max_depth=9, min_samples_leaf=101, criterion=gini |
+| Random forest | 0.652 ± 0.019 (+0.081) | 0.678 ± 0.014 (+0.011) | 0.683 | +0.004 | max_depth=22, min_samples_leaf=42, max_features=0.5 |
+| Oblique random forest | 0.650 ± 0.009 (+0.113) | 0.682 ± 0.014 (+0.011) | 0.683 | -0.000 | max_depth=4, min_samples_leaf=2, n_components=10 |
+| AdaBoost | 0.676 ± 0.012 (+0.006) | 0.682 ± 0.016 (+0.005) | 0.684 | -0.000 | max_depth=4, n_estimators=220, learning_rate=0.0251 |
+
+- Tuning helped the models that were overfitting. The tree went from 0.611 to 0.675 and its gap dropped from +0.084 to +0.009, and both forests gained about 3 points. AdaBoost and logistic regression barely moved because they weren't overfitting in the first place. For logistic regression the gain is basically zero: the outer folds picked C anywhere between 0.035 and 1.77 and the score stayed the same. A linear model on 10 features doesn't have much variance for regularisation to remove.
+- The chosen hyperparameters fit how each model works. The forest keeps deep trees (max_depth=22) but needs at least 42 people per leaf, so it stops memorising single cases and lets the averaging deal with the rest. AdaBoost goes the other way: fairly weak trees (depth 4), a small learning rate and more rounds.
+- No model really wins. AdaBoost has the best mean (0.682), but the corrected paired t-test gives p between 0.26 and 0.86 against every other model, and against the oblique forest it only wins 2 of the 5 folds. Everything ends around 0.68, so the limit looks like the features, not the model. I keep the random forest: it's tied with the best, and it's the model in the upstream config, so my config stops conflicting on every merge.
+- The number I report is the nested score (random forest 0.678 ± 0.014), not the best trial (0.683). The best trial is the maximum of 30 noisy CV scores, so part of it is luck. The optimism is small on average (+0.004 for the forest), but per fold it goes from -0.013 to +0.031, so with 5 folds that average is mostly noise. Fold 2 is the hard one for every model (about 0.65-0.66) and it's also where the tuning was most optimistic.
+- Fairness looks like week 4. Every model gives African-Americans about twice the false positive rate of Caucasians (random forest 0.30 vs 0.17, COMPAS 0.45 vs 0.23). Logistic regression has the lowest rates (0.25 vs 0.12), but the ratio is still about 2x, so it seems to predict "reoffends" less often overall rather than being fairer.
