@@ -248,3 +248,39 @@ All five models tuned with Optuna (30 trials, 5 inner folds) and scored with nes
 - No model really wins. AdaBoost has the best mean (0.682), but the corrected paired t-test gives p between 0.26 and 0.86 against every other model, and against the oblique forest it only wins 2 of the 5 folds. Everything ends around 0.68, so the limit looks like the features, not the model. I keep the random forest: it's tied with the best, and it's the model in the upstream config, so my config stops conflicting on every merge.
 - The number I report is the nested score (random forest 0.678 ± 0.014), not the best trial (0.683). The best trial is the maximum of 30 noisy CV scores, so part of it is luck. The optimism is small on average (+0.004 for the forest), but per fold it goes from -0.013 to +0.031, so with 5 folds that average is mostly noise. Fold 2 is the hard one for every model (about 0.65-0.66) and it's also where the tuning was most optimistic.
 - Fairness looks like week 4. Every model gives African-Americans about twice the false positive rate of Caucasians (random forest 0.30 vs 0.17, COMPAS 0.45 vs 0.23). Logistic regression has the lowest rates (0.25 vs 0.12), but the ratio is still about 2x, so it seems to predict "reoffends" less often overall rather than being fairer.
+
+### Week 7: boosting and the scoreboard
+
+Every model below was tuned with Optuna (30 trials, 5 inner folds) and scored with nested CV on the same 5 outer folds, one run per model in `results/runs.csv`. Logistic regression and the dummy have no search space, so they only have the untuned score. The test set is still untouched.
+
+**Selection metric: ROC-AUC.** COMPAS is used to rank people by risk, and ROC-AUC measures exactly that ranking (how often someone who reoffended gets a higher score than someone who didn't), without depending on the 0.5 cut-off. Where to put the threshold is a separate decision, and here it's closer to a policy choice than a modelling one, so I don't want the metric to fix it for me. It's also less noisy than accuracy when comparing models fold by fold, which was the problem last week.
+
+| Model | Untuned | Tuned (nested CV) | Floor (dummy) |
+|---|---|---|---|
+| Gradient boosting | 0.727 | 0.728 ± 0.014 | 0.500 |
+| HistGradientBoosting | 0.717 | 0.728 ± 0.015 | 0.500 |
+| Random forest | 0.684 | 0.727 ± 0.016 | 0.500 |
+| Oblique random forest | 0.686 | 0.727 ± 0.015 | 0.500 |
+| AdaBoost | 0.723 | 0.727 ± 0.014 | 0.500 |
+| Logistic regression | 0.718 | not tuned | 0.500 |
+| Decision tree | 0.612 | 0.716 ± 0.015 | 0.500 |
+| Naive Bayes | 0.685 | 0.705 ± 0.012 | 0.500 |
+| Dummy | 0.500 | not tuned | 0.500 |
+
+Best model (gradient boosting) against each of the others, corrected paired t-test on the 5 outer folds:
+
+| Gradient boosting vs | Mean diff | Folds won | p |
+|---|---|---|---|
+| HistGradientBoosting | +0.000 | 3/5 | 0.976 |
+| Random forest | +0.001 | 3/5 | 0.561 |
+| Oblique random forest | +0.002 | 4/5 | 0.405 |
+| AdaBoost | +0.002 | 4/5 | 0.336 |
+| Logistic regression | +0.010 | 5/5 | 0.035 |
+| Decision tree | +0.013 | 5/5 | 0.027 |
+| Naive Bayes | +0.023 | 5/5 | 0.004 |
+
+Tuning mattered most for the models that were overfitting: the tree went from 0.612 to 0.716 and both forests gained about 4 points, while gradient boosting barely moved (0.727 to 0.728), so its default settings were already close to what this data needs. After tuning, the five ensembles end up within 0.002 of each other, and against the other four the test gives p between 0.34 and 0.98, so gradient boosting has the best mean but there's no real winner among them.
+
+What changes with ROC-AUC is that the test can now separate the best model from the simpler ones. Gradient boosting beats logistic regression, the tuned tree and Naive Bayes in all 5 folds, with p below 0.05, while last week, with accuracy, the best model couldn't be separated from any other (p between 0.26 and 0.86). The gain over logistic regression is still small (+0.010), though. Naive Bayes is the weakest real model: even tuned it flags very few people (recall 0.25, precision 0.74), probably because it treats correlated features like `age` and `age_cat` as independent.
+
+`config.yaml` now runs gradient boosting, as the week 7 notebook asks. It's also the top of my scoreboard, but given the tests above I'd treat it as tied with the other ensembles.
