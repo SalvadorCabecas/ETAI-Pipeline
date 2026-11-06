@@ -322,3 +322,16 @@ Tuning mattered most for the models that were overfitting: the tree went from 0.
 What changes with ROC-AUC is that the test can now separate the best model from the simpler ones. Gradient boosting beats logistic regression, the tuned tree and Naive Bayes in all 5 folds, with p below 0.05, while last week, with accuracy, the best model couldn't be separated from any other (p between 0.26 and 0.86). The gain over logistic regression is still small (+0.010), though. Naive Bayes is the weakest real model: even tuned it flags very few people (recall 0.25, precision 0.74), probably because it treats correlated features like `age` and `age_cat` as independent.
 
 `config.yaml` now runs gradient boosting, as the week 7 notebook asks. It's also the top of my scoreboard, but given the tests above I'd treat it as tied with the other ensembles.
+
+### Week 8: XGBoost and feature selection
+
+I ran XGBoost tuned twice on the same 5 folds (30 Optuna trials, nested CV): once without feature selection and once with the `VoteSelector`, where `select__min_votes` is tuned together with the model.
+
+| Run | Features used | Untuned | Tuned (nested CV) |
+|---|---|---|---|
+| XGBoost, selection off | 10 | 0.724 | 0.727 ± 0.016 |
+| XGBoost, selection on | 2 (`age`, `priors_count`) | 0.721 | 0.725 ± 0.013 |
+
+Corrected paired t-test, selection on vs off on the same outer folds: mean difference -0.0025, selection wins 1 of 5 folds, p = 0.40.
+
+Without selection, tuned XGBoost scores 0.727, the same as gradient boosting, HistGradientBoosting, AdaBoost and the two forests, so it just joins the group of tied ensembles from last week. With selection, the final model keeps only 2 of the 10 features (`age` and `priors_count`) and the score stays basically the same: the difference is -0.0025 and the test gives p = 0.40, so the smaller model is as good as the full one. The chosen `min_votes` changes from fold to fold (2, 1, 2, 1, 2 in the outer folds and 3 for the final model), which shows the score barely depends on how many features are kept: most of the useful information in COMPAS is in age and prior offences, and features like `age_cat` mostly repeat it. Unlike the notebook example with 20 noise columns, there is no noise to remove here, so selection doesn't improve the score, it only makes the model simpler. I'd keep selection on, because a model that uses 2 features instead of 10 gives the same ROC-AUC, is easier to explain (which matters for a tool like COMPAS) and varies a bit less between folds (std 0.013 vs 0.016), even though the `VoteSelector` trains three extra models in every fold.
