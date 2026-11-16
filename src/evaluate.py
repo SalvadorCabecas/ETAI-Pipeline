@@ -92,25 +92,30 @@ def oof_classification_report(y_true, oof_proba, threshold: float = 0.5) -> str:
 
 
 def fairness_report(y_true, oof_proba, extras: pd.DataFrame, sensitive_attr: str = "race",
-                    threshold: float = 0.5) -> str:
+                    threshold: float = 0.5, benchmark: dict = None) -> str:
     """
-    False positive rate (share of people who did not reoffend but were predicted to) per
-    group of `sensitive_attr`, for the model's out-of-fold predictions and for COMPAS's own
-    score (`score_text` other than "Low" counts as predicted to reoffend), on the same rows.
-    Rows with an unknown group are reported as "unknown". A simple check, not a full audit.
+    False positive rate (share of rows with target 0 that were predicted 1) per group of
+    `sensitive_attr`, for the model's out-of-fold predictions and, if `benchmark` is given,
+    for an existing score on the same rows: `benchmark["column"]` counts as predicted 0 when
+    its value is in `benchmark["negative_values"]`, and 1 otherwise (for COMPAS: `score_text`
+    other than "Low"). Rows with an unknown group are reported as "unknown". A simple check,
+    not a full audit.
     """
     df = extras.copy()
     df[sensitive_attr] = df[sensitive_attr].astype(object).fillna("unknown")
     df["y_true"] = pd.Series(y_true).values
     df["y_pred_model"] = (oof_proba >= threshold).astype(int)
-    df["y_pred_compas"] = (df["score_text"] != "Low").astype(int)
+    scores = [("Our model", "y_pred_model")]
+    if benchmark and benchmark.get("column") in df.columns:
+        df["y_pred_benchmark"] = (~df[benchmark["column"]].isin(benchmark.get("negative_values", []))).astype(int)
+        scores.append((benchmark.get("label", benchmark["column"]), "y_pred_benchmark"))
 
     lines = [
         f"False positive rate by {sensitive_attr} (development set, out-of-fold)",
-        "(share of people who did NOT reoffend, but were predicted to)",
+        "(share of rows with target 0 that were predicted 1)",
         "",
     ]
-    for label, col in [("Our model", "y_pred_model"), ("COMPAS's own score", "y_pred_compas")]:
+    for label, col in scores:
         lines.append(f"  {label}:")
         for group, g in df.groupby(sensitive_attr):
             negatives = g[g["y_true"] == 0]

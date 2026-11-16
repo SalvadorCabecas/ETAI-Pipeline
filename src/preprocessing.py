@@ -50,7 +50,8 @@ def _canonicalize_categories(df: pd.DataFrame, columns_and_maps: dict, placehold
 
 def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     """
-    Applies the cleaning rules in `diagnostics_config`: placeholder tokens and domain-rule
+    Applies the cleaning rules in `diagnostics_config`: placeholder tokens (in
+    `numeric_text_columns`, `placeholder_columns` and the canonical categories) and domain-rule
     violations become NaN, category spellings are canonicalized and redundant columns are
     dropped. Row-preserving and target-agnostic, so it runs unchanged on data to predict.
     """
@@ -60,6 +61,13 @@ def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     for col in diagnostics_config.get("numeric_text_columns", []):
         if col in out.columns:
             out[col] = pd.to_numeric(out[col].replace(list(placeholder_tokens), np.nan), errors="coerce")
+
+    # Text columns whose placeholder tokens ("?", "n/a", ...) mean "unknown". Without this, a
+    # placeholder is only cleaned in the columns listed under canonical_categories.
+    for col in diagnostics_config.get("placeholder_columns", []):
+        if col in out.columns:
+            is_placeholder = out[col].astype("string").str.strip().isin(placeholder_tokens).fillna(False)
+            out[col] = out[col].mask(is_placeholder.astype(bool))
 
     flag_invalid_values(out, diagnostics_config.get("validity_rules", {}))
     out = _canonicalize_categories(out, diagnostics_config.get("canonical_categories", {}), placeholder_tokens)
@@ -90,8 +98,9 @@ def add_missingness_indicators(df: pd.DataFrame, mnar_indicator_sources: list) -
 
 def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_sources: list):
     """
-    Returns (X, y, extras). `extras` holds the columns kept out of the features for auditing
-    (the sensitive attribute and COMPAS's own score). On label-free data `y` is None.
+    Returns (X, y, extras). `extras` holds the columns kept out of the features for auditing:
+    the sensitive attribute and, if `data_config["benchmark"]` names one, an existing score to
+    audit next to the model (COMPAS's own score). On label-free data `y` is None.
     """
     target = data_config["target"]
     sensitive_attr = data_config["sensitive_attr"]
@@ -100,7 +109,8 @@ def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_so
     df = add_missingness_indicators(df, mnar_indicator_sources)
     y = df[target] if target in df.columns else None
 
-    extras_cols = [c for c in [sensitive_attr, "score_text"] if c in df.columns]
+    benchmark_col = (data_config.get("benchmark") or {}).get("column")
+    extras_cols = [c for c in [sensitive_attr, benchmark_col] if c and c in df.columns]
     extras = df[extras_cols].copy() if extras_cols else None
 
     always_drop = set(drop_columns) | {target, sensitive_attr}

@@ -13,7 +13,8 @@ def save_scores(path: str, row: dict) -> pd.DataFrame:
     return runs
 
 
-def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
+def save_run(results_dir: str, run: str, config: dict, report_text: str,
+             config_path: str = "config.yaml") -> str:
     """
     Writes the run's settings and full report to `results_dir/run_<run>.txt` (the folder is
     created if needed) and returns the path.
@@ -30,6 +31,7 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
                       if selection.get("enabled") else "off")
     header = (
         f"Run: {run}\n"
+        f"Config: {config_path}  data={config['data']['path']}\n"
         f"Model: {config['model']['type']}  params={config['model'].get('params')}\n"
         f"Preprocessing: encoder={config['preprocessing']['encoder']}  "
         f"scaler={config['preprocessing']['scaler']}\n"

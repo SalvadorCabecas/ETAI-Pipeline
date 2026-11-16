@@ -1,5 +1,6 @@
 """
-Entry point: `python main.py`.
+Entry point: `python main.py [config file]` (default: config.yaml, the COMPAS pipeline),
+e.g. `python main.py config_adult.yaml`.
 
 load config -> load and clean data -> drop duplicate rows (training only) -> features/target
 -> lock the test set -> cross-validate the pipeline (preprocessing, feature selection if enabled,
@@ -8,6 +9,7 @@ model) on the development set (several metrics, and the no-model floor on the sa
 -> out-of-fold reports -> refit on all development rows -> scoreboard + full report
 """
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 
@@ -22,6 +24,7 @@ from src.evaluate import (build_scorers, cross_validate_pipeline, cv_report, oof
                           fairness_report)
 from src.tuning import tune_pipeline, nested_cross_validate, tuning_report
 from src.results import save_run, save_scores
+from src.predict import predict_new
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -29,8 +32,9 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def main():
-    config = load_config()
+def main(config_path: str = None):
+    config_path = config_path or (sys.argv[1] if len(sys.argv) > 1 else "config.yaml")
+    config = load_config(config_path)
     run = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_type = config["model"]["type"]
 
@@ -60,6 +64,7 @@ def main():
     print(f"Model: {model_type}   |   selection metric: {selection_metric}   |   "
           f"{cv_config['n_splits']}-fold CV   |   feature selection: "
           f"{'min_votes ' + str(selection_config.get('min_votes', 2)) if selection_enabled else 'off'}")
+    print(f"Config: {config_path}")
     print(f"Data:  {len(X_dev)} development rows   |   {len(X_test)} test rows locked away (not used)")
 
     cache_dir = tempfile.mkdtemp(prefix="pipeline_cache_")       # deleted at the end of the run
@@ -70,10 +75,10 @@ def main():
     fold_scores, oof_proba = cross_validate_pipeline(pipeline, X_dev, y_dev, cv, scorers, selection_metric, n_jobs)
     floor, untuned = floor_scores["validation"].mean(), fold_scores["validation"].mean()
 
-    print("\nDefault hyperparameters (config.yaml)")
+    print(f"\nDefault hyperparameters ({config_path})")
     print(f"  {selection_metric}: {untuned:.3f} ± {fold_scores['validation'].std(ddof=1):.3f}   "
           f"train-validation gap: {fold_scores['gap'].mean():+.3f}   no-model floor: {floor:.3f}")
-    report = (f"Hyperparameters from config.yaml: {config['model'].get('params')}\n\n"
+    report = (f"Hyperparameters from {config_path}: {config['model'].get('params')}\n\n"
               + cv_report(fold_scores, metrics, selection_metric, "Cross-validation")
               + f"\n\nNo-model floor (dummy, same folds): {selection_metric} = {floor:.3f}")
     final_scores = fold_scores
@@ -83,7 +88,7 @@ def main():
     if tuning_enabled:
         search_spaces = tuning_config.get("search_spaces") or {}
         if model_type not in search_spaces:
-            raise ValueError(f"tuning is enabled but config.yaml has no tuning.search_spaces for "
+            raise ValueError(f"tuning is enabled but {config_path} has no tuning.search_spaces for "
                              f"'{model_type}'. Add one, or set tuning.enabled: false.")
         search_space = dict(search_spaces[model_type])
         if selection_enabled:
@@ -117,7 +122,8 @@ def main():
     for name in metrics:
         print(f"  {name:<18s} {final_scores[name].mean():.3f} ± {final_scores[name].std(ddof=1):.3f}")
     report += "\n\n" + oof_classification_report(y_dev, oof_proba)
-    report += "\n" + fairness_report(y_dev, oof_proba, extras_dev, sensitive_attr=config["data"]["sensitive_attr"])
+    report += "\n" + fairness_report(y_dev, oof_proba, extras_dev, sensitive_attr=config["data"]["sensitive_attr"],
+                                     benchmark=config["data"].get("benchmark"))
 
     pipeline.fit(X_dev, y_dev)
     refit = f"Final model: {model_type} refit on all {len(X_dev)} development rows."
@@ -125,6 +131,9 @@ def main():
         all_features = pipeline.named_steps["prep"].get_feature_names_out()
         kept = pipeline.named_steps["select"].get_feature_names_out(all_features)
         refit += f"\nFeatures kept: {len(kept)} of {len(all_features)}: {', '.join(kept)}"
+    if config.get("predict"):
+        predictions_path = predict_new(pipeline, config, list(X_dev.columns))
+        refit += f"\nPredictions for {config['predict']['path']}: {predictions_path}"
     report += "\n" + refit + "\n"
 
     row = {"run": run, "data": config["data"]["path"], "model": model_type, "tuned": tuning_enabled,
@@ -144,7 +153,7 @@ def main():
     report += f"\nScoreboard:\n{board}\n"
 
     shutil.rmtree(cache_dir, ignore_errors=True)
-    path = save_run(config.get("output", {}).get("results_dir", "results"), run, config, report)
+    path = save_run(config.get("output", {}).get("results_dir", "results"), run, config, report, config_path)
     print(f"\n{refit}\nFull report (per-fold tables, tuning, confusion matrix, fairness): {path}")
 
 

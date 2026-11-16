@@ -3,6 +3,10 @@ data:
   target: "two_year_recid"
   sensitive_attr: "race"                            # never a feature; used only for the fairness report
   drop_columns: ["id", "decile_score", "score_text"]  # kept in the data, never used as features
+  benchmark:                                        # optional: an existing score audited next to the model
+    column: "score_text"
+    negative_values: ["Low"]                        # counts as "predicted 0"; any other value is 1
+    label: "COMPAS's own score"
 
 # Locked test set: never used to fit, tune or choose anything. Do not change once set.
 test_set:
