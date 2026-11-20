@@ -42,10 +42,13 @@ preprocessing:
   categorical_features: ["workclass", "marital_status", "occupation", "relationship", "native_country",
                          "v19", "v20", "v21", "v22", "v23", "v24", "v25"]
   mnar_indicator_sources: ["workclass", "occupation"]   # missing together, and missing carries information
-  random_state: 42                                  # target encoder's internal folds
+  random_state: 42                                  # target encoder's folds and the model-based imputers
   imputation:
-    numeric_strategy: "median"
+    numeric_strategy: "median"                      # median | mean | knn | iterative | random_forest
     categorical_strategy: "most_frequent"
+    n_neighbors: 5                                  # knn
+    max_iter: 10                                    # iterative, random_forest
+    n_estimators: 50                                # random_forest (trees per column)
 
 model:
   type: "xgboost"  # dummy | logistic_regression | naive_bayes | decision_tree | random_forest | oblique_random_forest | adaboost | gradient_boosting | hist_gradient_boosting | xgboost
@@ -124,6 +127,7 @@ tuning:
 
 output:
   results_dir: "results_adult"
+  model_path: "models/model_adult.joblib"           # its own saved model: never overwrites the COMPAS one
   scoreboard: "results_adult/runs.csv"              # its own scoreboard: never mixed with COMPAS runs
 
 # After the final refit: predict the new people (no target). Rows out = rows in.
