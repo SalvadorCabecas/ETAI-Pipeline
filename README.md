@@ -15,7 +15,8 @@ go on.
 
 ```
 .
-├── main.py                  # entry point: run the whole pipeline
+├── main.py                  # entry point: train, evaluate and save the model
+├── predict.py               # entry point: predict a new CSV with the saved model (week 10)
 ├── config.yaml               # all tunable settings live here
 ├── requirements.txt
 ├── src/
@@ -26,8 +27,10 @@ go on.
 │   ├── tuning.py             # hyperparameter tuning with Optuna + nested cross-validation (week 5)
 │   └── results.py            # saves each run's report to disk, and its scores to the runs table (week 7)
 ├── results/                  # created automatically -- one report per run + runs.csv, the table of all runs (not tracked in git)
+├── models/                   # created automatically -- model.joblib, the final fitted pipeline (not tracked in git)
 └── data/
     ├── compas_two_year_recidivism.csv
+    ├── compas_new_people.csv  # 20 people without the target, to try predict.py
     └── README.md              # problem description + full data dictionary
 ```
 
@@ -45,6 +48,7 @@ This table is updated after each practical class, so you can always see what cha
 | 7 | Gradient boosting + evaluating with probabilities | Three new model types in `src/model.py`: `gradient_boosting` (scikit-learn's `GradientBoostingClassifier`: each shallow tree fits the gradient of the log-loss left by the trees before it), `hist_gradient_boosting` (the same idea on binned features: much faster on large data, and it handles missing values itself) and `naive_bayes` (`GaussianNB`, a fast probabilistic baseline); gradient boosting is now the model `main.py` runs, each with its search space in `config.yaml`; evaluation now reports **several metrics** (accuracy, balanced accuracy, precision, recall, F1, F-beta, ROC-AUC, PR-AUC) and one **selection metric** (`cv.selection_metric`, ROC-AUC) that tuning maximises and runs are ranked by; out-of-fold **probabilities** (not just labels) feed the reports, with a confusion matrix; `class_weight: balanced` in the commented examples of the models that support it; new `save_scores()` in `src/results.py`: every run adds a row to `results/runs.csv` (the model and its settings, the score on each fold, the no-model floor and the untuned score on the same folds), so any two runs on the same data and folds can be compared with `corrected_paired_test()`; the printed output was reorganised to be easier to read, with the full tables in the results file (optional: keep your own format if you prefer) -- see "Model evaluation" below |
 | 8 | XGBoost + feature selection | New model type `xgboost` (`XGBClassifier`, from the `xgboost` package: gradient boosting with extra regularisation, multi-threaded, handles missing values itself), now the model `main.py` runs, with its search space in `config.yaml`; **feature selection** as a learned step of the Pipeline: new `VoteSelector` class in `src/model.py` (a random forest, gradient boosting and an L1 logistic regression vote; features with at least `min_votes` votes are kept), placed between `"prep"` and `"model"` by `build_pipeline()` when the new `feature_selection` section of `config.yaml` switches it on, so it is re-fitted on the training rows of every fold (never on the rows it is scored on); with tuning on, `select__min_votes` is tuned with the model and assessed by nested CV; the pipeline caches fitted preprocessing and selection steps during a run (`Pipeline(memory=...)`, a temporary folder deleted at the end), so tuning doesn't refit them in every trial; the final model's kept features are printed, and the scoreboard records the selection setting -- see "Feature selection" below |
 | 9 | Making the pipeline work beyond COMPAS (option A: Adult income) | `main.py` takes the config file as an argument (`python main.py config_adult.yaml`; with no argument it runs `config.yaml`, the COMPAS pipeline, with the same numbers as before); new `config_adult.yaml` with Adult's own cleaning rules, features, sensitive attribute and output folder (`results_adult/`); new `diagnostics.placeholder_columns`: placeholder tokens such as `?` become missing values in any listed text column (before, only the columns under `canonical_categories` were cleaned); the existing score compared in the fairness report is now optional and set in the config (`data.benchmark`, COMPAS's `score_text`) instead of being hard-coded; new `src/predict.py` predicts label-free data after the final refit (`predictions/adult_new_predictions.csv`, one row per input row); the run report records which config file was used -- see "Week 9: Beyond COMPAS" below |
+| 10 | Missing values + a deployable pipeline | The numeric imputer is a config choice (`preprocessing.imputation.numeric_strategy`): `median`, `mean`, `knn` (`KNNImputer`), `iterative` (MICE with one completed dataset, `IterativeImputer`) or `random_forest` (the missForest idea: `IterativeImputer` with a random forest per column); the numeric columns are now scaled **before** they are imputed (scalers ignore gaps when fitting, and KNN needs one scale); none of the imputers looks at the target, so they also run on new data; the runs table and report record the imputer; `main.py` **saves the final fitted pipeline** to `models/model.joblib`; new **`predict.py`**: `python predict.py new.csv predictions.csv` cleans the file with the same rules (no rows dropped) and writes one row per input row (id, probability, prediction); `data/compas_new_people.csv` to try it -- see "Missing values" and "Predicting new data" below |
 
 ## Preprocessing decisions
 
@@ -111,6 +115,27 @@ It returns the mean difference, the folds the first run wins, t and the p-value.
 Set `feature_selection.enabled` in `config.yaml` to add the `"select"` step between preprocessing and the model. `VoteSelector` fits three models on the training rows (a random forest, gradient boosting, and an L1-penalised logistic regression); each votes for the features it finds useful (above-average importance, or a non-zero coefficient), and features with at least `min_votes` votes are kept. Because it learns from the labels, it lives **inside** the Pipeline and is re-fitted in every fold; selecting features on all rows before cross-validation would make the score optimistic. With tuning on, `feature_selection.search_space` is added to the model's search space, so `min_votes` is chosen with the model's hyperparameters and assessed by nested CV. The features the final model keeps are printed at the end of each run.
 
 **XGBoost** is a separate package: see "Installing XGBoost" below if `import xgboost` fails.
+
+## Missing values
+
+Gaps in categorical columns are filled with the most frequent value. For numeric columns, `preprocessing.imputation.numeric_strategy` chooses how:
+
+| `numeric_strategy` | Fills a gap with | Notes |
+|---|---|---|
+| `median` / `mean` | the column's median / mean on the training rows | fast baselines |
+| `knn` | the mean of the `n_neighbors` most similar rows | needs scaled columns (the pipeline scales first) |
+| `iterative` | a prediction from the other numeric columns, refined over `max_iter` rounds (MICE, one completed dataset) | |
+| `random_forest` | the same, with a random forest per column (missForest) | the slowest |
+
+All of them are fitted on the training rows of each fold, inside the Pipeline, and none uses the target, so the same imputer runs on new data in `predict.py`. They only see the numeric columns. The `<col>_was_missing` flags (`mnar_indicator_sources`) keep the fact that a value was missing, for the columns where that is informative.
+
+## Predicting new data
+
+At the end of every run, `main.py` saves the final model (the whole fitted Pipeline: imputers, encoders, selected features and model, refit on all development rows) to `models/model.joblib` (`output.model_path` in `config.yaml`; each run overwrites it). To predict a CSV with the same columns as the training data (the target isn't needed):
+```bash
+python predict.py data/compas_new_people.csv predictions.csv
+```
+The output has one row per input row: the id, the probability and the prediction (at 0.5). The new file is cleaned with the rules in `config.yaml` and never de-duplicated: every row gets a prediction.
 
 ## Environment setup
 
@@ -223,7 +248,7 @@ This loads `config.yaml`, diagnoses and cleans the data (week 3), locks the fina
 - with tuning on, **Tuning**: the nested cross-validation score (the honest score of the tuned model) and the chosen hyperparameters
 - **All metrics**: mean ± std of every metric
 - **Scoreboard**: this run next to the earlier runs on the same data and metric, best first
-- the final model (refit on all development rows), the features it keeps (with feature selection on) and where the full report was saved
+- the final model (refit on all development rows), the features it keeps (with feature selection on), where the full report was saved and where the model was saved for `predict.py`
 
 The full detail -- per-fold tables for every metric, the tuning report, the out-of-fold confusion matrix and classification report, the false-positive-rate-by-race comparison with COMPAS's own score -- goes to the results file.
 
@@ -365,3 +390,24 @@ Without selection, tuned XGBoost scores 0.727, the same as gradient boosting, Hi
 Untuned without selection scores 0.905, with a train-validation gap of +0.071 (+0.026 with selection). Corrected paired t-test on the same folds: tuned with vs without selection +0.0006 (p = 0.71); untuned vs tuned, both with selection, +0.0053 for the untuned model, 5 of 5 folds (p = 0.09). The features kept are `age`, `education_num`, `capital_gain`, `capital_loss`, `hours_per_week`, `marital_status`, `occupation` and `relationship`: none of the 25 `v` columns and neither missingness flag. False positive rate by sex (tuned, selection on): 0.03 for women and 0.09 for men.
 
 The hardest assumption to find was the placeholder cleaning, because it didn't break anything: the missing `score_text` crashed straight away, but the `?` values would have gone into the model as a real category without any error, and I only saw it by checking the `value_counts` after cleaning. All three runs reach the target scores, and what got there was mostly the cleaning and the feature choices (placeholders turned into missing values with flags, `fnlwgt` and `education` out) plus a boosting model, not the tuning. The `v` columns were noise: without selection the untuned model overfits more (gap +0.071) and scores lower, and selection or tuning fixes that, which is the same lesson as the noise columns in the week 8 notebook. Tuning didn't help here (the untuned model is better in all 5 folds, p = 0.09), because the default XGBoost settings already suit this data, but I kept tuning on in `config_adult.yaml` so the score I report is the honest nested estimate, and it still reaches the targets. The model flags men who earn less than 50K about three times as often as women, even though `sex` is not a feature, probably through `relationship` and `marital_status` (husband and wife), so leaving a sensitive attribute out doesn't stop the model from using it indirectly.
+
+### Week 10: missing values and predicting new people
+
+**Imputer runs.** COMPAS, XGBoost with feature selection, tuning off, the same 5 folds for every run; only `preprocessing.imputation.numeric_strategy` changes.
+
+| Numeric imputer | ROC-AUC | vs median: mean diff | Folds won | p | Run time |
+|---|---|---|---|---|---|
+| `median` | 0.721 ± 0.013 | | | | 1 s |
+| `iterative` (MICE) | 0.721 ± 0.014 | +0.0001 | 2/5 | 0.95 | 3 s |
+| `random_forest` (missForest) | 0.721 ± 0.013 | +0.0002 | 2/5 | 0.88 | 17 s |
+| `knn` | 0.720 ± 0.014 | -0.0007 | 2/5 | 0.82 | 4 s |
+
+The four imputers give the same score: none of them beats the median in more than 2 of 5 folds, and every p-value is above 0.8. I keep `median`, because it scores the same, it is the fastest and the simplest to explain, and the model-based ones have nothing extra to work with here: they only see the five numeric columns, which say very little about each other, so their guesses end up close to the median anyway (the notebook shows this with hidden values). On top of that, the columns where the gap itself matters (`priors_count`, `c_charge_degree`) already have a `_was_missing` flag, and `random_forest` was the slowest by far and gave convergence warnings.
+
+**Predicting new people.** After every run, `main.py` saves the whole fitted pipeline to `models/model.joblib`. Then:
+
+```bash
+python predict.py data/compas_new_people.csv predictions.csv
+```
+
+It cleans the file with the same rules as training, without removing duplicates, and writes one row per input row: `id`, `probability` (of reoffending) and `prediction` (1 if the probability is at least 0.5). The check gives 20 rows in and 20 rows out: the `?` in `priors_count` and the missing age are filled by the saved imputer, the unseen charge degree `"X"` doesn't crash the encoder, and the same person entered twice gets the same prediction twice. I added a `--config` option (default `config.yaml`), so the Adult model, saved to its own `models/model_adult.joblib`, can be used the same way: `python predict.py data/adult_new.csv predictions_adult.csv --config config_adult.yaml` gives 2,000 rows.
